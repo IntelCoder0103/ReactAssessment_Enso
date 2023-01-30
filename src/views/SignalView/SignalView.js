@@ -34,9 +34,11 @@ const getTickWidth = (totalWidth) => {
 const SignalView = () => {
   // Access the height of the chart as chartWrapperRef.current?.clientHeight to determine the height to set on events
   const chartWrapperRef = useRef();
-  const [tickWidth, setTickWidth] = useState(0);
+  const [tickWidth, setTickWidth] = useState(0); // space between each tick
   const [events, setEvents] = useState([]);
   const [currentEvent, setCurrentEvent] = useState();
+  const [resizeEventIndex, setResizeEventIndex] = useState(-1);
+  const [resizePosition, setResizePosition] = useState("start");
   const debouncedEvent = useDebounce(currentEvent, 5);
   const height =
     chartWrapperRef.current?.clientHeight - (PADDING.bottom + PADDING.top) || 0;
@@ -44,61 +46,121 @@ const SignalView = () => {
   const updateTickWidth = () => {
     setTickWidth(getTickWidth(chartWrapperRef.current?.clientWidth));
   };
-
   window.addEventListener("resize", updateTickWidth);
 
   useEffect(() => {
     updateTickWidth();
   }, []);
 
-  console.log(tickWidth);
+  /**
+   * handling click event
+   */
   const handleOverlayClick = (event) => {
     // Prevent the event from bubbling up to the chart
+
     if (event.buttons == 1) {
       event.stopPropagation();
       event.preventDefault();
-      console.log(event);
-      let start = (event.clientX - PADDING.left) / tickWidth;
-      setCurrentEvent({
-        start,
-        duration: 0,
-        state: "Creating",
-        tick: tickWidth,
-        height,
-      });
-      console.log(start);
+      let pos = (event.clientX - PADDING.left) / tickWidth;
+
+      let eventIndexToResize = findEventIndexToResize(pos);
+      setResizeEventIndex(eventIndexToResize);
+
+      if (eventIndexToResize >= 0) {
+        handleClickForResize(pos, eventIndexToResize);
+      } else {
+        handleClickForCreating(pos);
+      }
     }
   };
 
+  const handleClickForResize = (pos, index) => {
+    const ev = events[index];
+    setResizePosition(Math.abs(pos - ev.start) < 1e-2 ? "start" : "end");
+  };
+
+  const handleClickForCreating = (pos) => {
+    let start = pos;
+    setCurrentEvent({
+      start,
+      duration: 0,
+      state: "Creating",
+      tick: tickWidth,
+      height,
+    });
+  };
+
+  /**
+   * handling dragging event
+   */
   const handleOverlayMove = (event) => {
     event.stopPropagation();
     event.preventDefault();
+
+    let pos = (event.clientX - PADDING.left) / tickWidth;
     if (event.buttons == 1) {
-      let end = (event.clientX - PADDING.left) / tickWidth;
-      setCurrentEvent((currentEvent) => ({
-        ...currentEvent,
-        duration: end - currentEvent?.start,
-      }));
+      if (resizeEventIndex >= 0) {
+        handleDragForResize(pos);
+      } else {
+        handleDragForCreating(pos);
+      }
+    } else {
+      updateMouseCursor(pos);
     }
   };
 
-    const handleOverlayRelease = () => {
-        setEvents(events => [
-            ...events,
-            {
-                ...currentEvent,
-                state: "Created",
-            }
-        ]);
-        setCurrentEvent();
-  }
+  const handleDragForResize = (pos) => {
+    let start = events[resizeEventIndex].start;
+    let end = events[resizeEventIndex].duration + start;
+    setEvents((events) => {
+      if (resizePosition == "start") start = pos;
+      else end = pos;
+      events[resizeEventIndex].start = start;
+      events[resizeEventIndex].duration = end - start;
+      return [...events];
+    });
+  };
+  const handleDragForCreating = (pos) => {
+    let end = pos;
+    setCurrentEvent((currentEvent) => ({
+      ...currentEvent,
+      duration: end - currentEvent?.start,
+    }));
+  };
 
-  const event = {
-    start: 3,
-    duration: 2,
-    state: "Creating",
-    tick: tickWidth,
-    height,
+  /**
+   *
+   */
+  const findEventIndexToResize = (pos) => {
+    return events.findIndex((ev) => {
+      return (
+        Math.abs(pos - ev.start) < 1e-2 ||
+        Math.abs(pos - ev.start - ev.duration) < 1e-2
+      );
+    });
+  };
+
+  const updateMouseCursor = (pos) => {
+    if (findEventIndexToResize(pos) >= 0) {
+      document.body.style.cursor = "col-resize";
+    } else {
+      document.body.style.cursor = "pointer";
+    }
+  };
+
+  /**
+   * handling release event
+   */
+  const handleOverlayRelease = () => {
+    setEvents((events) => [
+      ...events,
+      {
+        ...currentEvent,
+        state: "Created",
+      },
+    ]);
+    setCurrentEvent();
+    setResizeEventIndex(-1);
   };
 
   return (
@@ -112,16 +174,17 @@ const SignalView = () => {
         onMouseMove={handleOverlayMove}
         onMouseUp={handleOverlayRelease}
       >
-        {/* You can place events in here as children if you so choose */}
+        {/* already created events */}
         {events.map((ev, index) => (
           <SignalEvent
             key={index}
             left={ev.start * tickWidth + PADDING.left}
             width={ev.duration * tickWidth}
             height={height}
-                state={ev.state}
+            state={ev.state}
           />
         ))}
+        {/* newly creating event */}
         {debouncedEvent && (
           <SignalEvent
             left={debouncedEvent.start * tickWidth + PADDING.left}
